@@ -1,0 +1,147 @@
+name: Set up Auditing Protocol
+
+# GitHub emits a push event when a repository is created from a template.
+on:
+  push:
+
+# The job only manages issue labels and disables this workflow when it is done.
+permissions:
+  actions: write
+  issues: write
+
+# A second push could arrive while the initial setup is still running. Serialize
+# runs per repository so the disabled-workflow check below remains deterministic.
+concurrency:
+  group: auditing-protocol-setup-${{ github.repository_id }}
+  cancel-in-progress: false
+
+jobs:
+  configure-labels:
+    # Never alter the source template repository, even if this workflow is
+    # manually re-enabled there.
+    if: github.event.repository.name != 'Auditing-Protocol'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check whether initialization is still active
+        id: initialization
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          workflow_json="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/setup-auditing-protocol.yml")" || {
+            echo "::error::Unable to read this workflow's state from the GitHub API."
+            exit 1
+          }
+
+          workflow_state="$(jq -r '.state' <<<"${workflow_json}")"
+          if [[ "${workflow_state}" != "active" ]]; then
+            echo "Initialization was already completed (workflow state: ${workflow_state})."
+            echo "should_configure=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          echo "should_configure=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Replace default labels with SanadSquad labels
+        if: steps.initialization.outputs.should_configure == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          required_labels='[
+            {"name":"Severity: Critical","color":"7D1D1D","description":"High impact and high likelihood."},
+            {"name":"Severity: High","color":"B5471F","description":"Funds at risk or severe disruption, with a realistic path."},
+            {"name":"Severity: Medium","color":"B98A1C","description":"Indirect risk or partial disruption."},
+            {"name":"Severity: Low","color":"5D7447","description":"Funds not at risk."},
+            {"name":"Severity: Informational","color":"3B5B92","description":"Best practice, no security impact."},
+            {"name":"Severity: Gas Optimization","color":"2B7A78","description":"Reduces gas cost."},
+            {"name":"Report Status: Open","color":"0E8A16","description":"Validated and reported to the client."},
+            {"name":"Report Status: Discuss","color":"FBCA04","description":"Under review, or raised by the AI assistant."},
+            {"name":"Report Status: Resolved","color":"6F42C1","description":"Fixed by the client and the fix was verified."},
+            {"name":"Report Status: Acknowledged","color":"57606A","description":"Valid, but the client will not fix it."},
+            {"name":"Client: Will Fix","color":"C5DEF5","description":"Client agrees and plans to fix it."},
+            {"name":"Client: Proposed Fix","color":"BFF0C4","description":"Fix is implemented and ready for review."},
+            {"name":"Client: Acknowledge","color":"C2C997","description":"Client agrees but will not fix it."},
+            {"name":"Client: Proposed Invalid","color":"F9C0C0","description":"Client believes the issue is invalid."},
+            {"name":"Client: Proposed Dispute","color":"FDDDB0","description":"Client agrees it is valid but disputes the severity."}
+          ]'
+
+          # --slurp produces one array per page; flatten it before comparing.
+          existing_labels="$(gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/labels?per_page=100" | jq -c 'add // []')" || {
+            echo "::error::Unable to list repository labels from the GitHub API."
+            exit 1
+          }
+
+          # Keep only labels that match a required name case-insensitively. A
+          # casing variant is patched below to the canonical required spelling.
+          while IFS= read -r label_name; do
+            [[ -z "${label_name}" ]] && continue
+            encoded_name="$(jq -rn --arg value "${label_name}" '$value | @uri')"
+            if ! gh api --method DELETE \
+              "repos/${GITHUB_REPOSITORY}/labels/${encoded_name}"; then
+              echo "::error::Failed to delete unexpected label: ${label_name}"
+              exit 1
+            fi
+          done < <(
+            jq -r --argjson required "${required_labels}" '
+              .[].name as $current
+              | select(any($required[]; (.name | ascii_downcase) == ($current | ascii_downcase)) | not)
+              | $current
+            ' <<<"${existing_labels}"
+          )
+
+          # Update existing required labels or create missing ones. GitHub's
+          # labels API accepts six-digit colors without the leading '#'.
+          while IFS= read -r label; do
+            name="$(jq -r '.name' <<<"${label}")"
+            color="$(jq -r '.color' <<<"${label}")"
+            description="$(jq -r '.description' <<<"${label}")"
+            existing_name="$(jq -r --arg name "${name}" '
+              .[]
+              | select((.name | ascii_downcase) == ($name | ascii_downcase))
+              | .name
+            ' <<<"${existing_labels}" | head -n 1)"
+
+            if [[ -n "${existing_name}" ]]; then
+              encoded_name="$(jq -rn --arg value "${existing_name}" '$value | @uri')"
+              if ! gh api --method PATCH \
+                "repos/${GITHUB_REPOSITORY}/labels/${encoded_name}" \
+                -f "name=${name}" \
+                -f "color=${color}" \
+                -f "description=${description}"; then
+                echo "::error::Failed to update required label: ${name}"
+                exit 1
+              fi
+            else
+              if ! gh api --method POST "repos/${GITHUB_REPOSITORY}/labels" \
+                -f "name=${name}" \
+                -f "color=${color}" \
+                -f "description=${description}"; then
+                echo "::error::Failed to create required label: ${name}"
+                exit 1
+              fi
+            fi
+          done < <(jq -c '.[]' <<<"${required_labels}")
+
+      - name: Disable this one-time workflow
+        if: steps.initialization.outputs.should_configure == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          # Disabling through the Actions API leaves the source file intact for
+          # auditing, while reliably preventing future push-triggered runs.
+          if ! gh api --method PUT \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/setup-auditing-protocol.yml/disable"; then
+            echo "::error::Label setup succeeded, but the one-time workflow could not be disabled."
+            exit 1
+          fi
