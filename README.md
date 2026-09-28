@@ -4,18 +4,39 @@ A GitHub repository template for SanadSquad audit engagements. Repositories
 created from it receive the vulnerability report template and a consistent,
 client-ready issue-label taxonomy.
 
+## Set up the template repository (one time, admins only)
+
+Do this once, when publishing the template itself:
+
+1. Create the repository in the SanadSquad organization named exactly
+   `Auditing-Protocol` (hyphen, not underscore). The setup workflow skips any
+   repository with this name, so a different spelling weakens that safeguard.
+2. Open **Settings → General** and tick **Template repository**. Without this,
+   the repository does not appear in the **Repository template** dropdown, and
+   the workflow's `is_template` guard is not active.
+3. Do not run the setup workflow here. If it is ever triggered manually, it
+   skips itself in this repository.
+
 ## Use this template
 
 1. In GitHub, select **Use this template** and create the new audit repository.
 2. The creation event is a `push`, so the copied setup workflow runs on the
    initial commit. If GitHub asks for a first commit during creation, make it.
 3. Wait for **Set up Auditing Protocol** to complete in the Actions tab.
-4. Open **Issues → New issue** and select the vulnerability template.
+4. Open **Issues → New issue** and select the **Vulnerability Report**
+   template.
+
+> **If the workflow does not appear in the Actions tab after about a minute,**
+> GitHub occasionally fails to emit the `push` event for a brand-new repository
+> created from a template. Either push any commit (for example, an edit to this
+> README) or open **Actions → Set up Auditing Protocol → Run workflow**. The
+> workflow stays active until it succeeds, so retrying is always safe.
 
 The new repository receives:
 
 - `.github/ISSUE_TEMPLATE/vulnerability.md`, the SanadSquad vulnerability
-  report template;
+  report template. It has a short YAML front matter block (`name` and `about`)
+  so GitHub lists it on the **New issue** page, followed by the report body;
 - exactly the 15 required SanadSquad labels, with their specified names,
   colors, and descriptions; and
 - removal of every pre-existing label that is not one of those 15, including
@@ -29,8 +50,10 @@ The new repository receives:
 
 GitHub templates copy files but do not copy labels. The copied workflow listens
 for `push`; GitHub emits that event when a repository is generated from a
-template. It explicitly skips any repository named `Auditing-Protocol`, so the
-source template is never changed.
+template. It skips the source template repository in two ways: it does nothing
+if the repository is marked as a template, and it does nothing if the
+repository is named `Auditing-Protocol`. Both checks exist so the source
+template's labels are never changed, even if one of them is misconfigured.
 
 The workflow first reads its own state through the Actions API. It lists all
 labels, deletes labels outside the required set, then creates or updates the
@@ -55,11 +78,13 @@ organization policy restricts them.
 
 Maintain the template source as follows:
 
-- edit `.github/ISSUE_TEMPLATE/vulnerability.md` to change the report form;
+- edit the body of `.github/ISSUE_TEMPLATE/vulnerability.md` to change the
+  report form, and keep its front matter (the `---` block at the top) intact,
+  because GitHub requires `name` and `about` to show the template;
 - edit the `required_labels` array in
   `.github/workflows/setup-auditing-protocol.yml` to change labels; and
 - edit the workflow itself only after considering its `push` trigger, template
-  safety check, and self-disable step.
+  safety checks, and self-disable step.
 
 Changes to this template do not propagate to repositories already created from
 it. Update those repositories separately. To intentionally run initialization
@@ -78,8 +103,8 @@ For the full integration check, create `Auditing-Protocol-Test` from this
 template and verify:
 
 1. the three copied files are present;
-2. **Issues → New issue** offers the vulnerability template with its expected
-   body;
+2. **Issues → New issue** lists the **Vulnerability Report** template, and
+   opening it shows the expected body;
 3. **Issues → Labels** contains exactly 15 labels with the required names,
    colors, and descriptions, and no GitHub defaults such as `bug` or
    `documentation`;
@@ -87,4 +112,5 @@ template and verify:
 5. a later commit does not create another initialization run.
 
 Also confirm that the original repository named `Auditing-Protocol` has no
-label changes: its job is skipped by the explicit repository-name guard.
+label changes: its job is skipped by the template-repository and
+repository-name guards.
