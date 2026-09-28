@@ -3,6 +3,7 @@ name: Set up Auditing Protocol
 # GitHub emits a push event when a repository is created from a template.
 on:
   push:
+  workflow_dispatch:
 
 # The job only manages issue labels and disables this workflow when it is done.
 permissions:
@@ -19,7 +20,7 @@ jobs:
   configure-labels:
     # Never alter the source template repository, even if this workflow is
     # manually re-enabled there.
-    if: github.event.repository.name != 'Auditing-Protocol'
+    if: ${{ !github.event.repository.is_template && github.event.repository.name != 'Auditing-Protocol' }}
     runs-on: ubuntu-latest
 
     steps:
